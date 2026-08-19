@@ -1,0 +1,131 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Pooled connection (PgBouncer / Supabase pooler / Neon pooler) - used
+  // by the application at runtime. Prisma's prepared-statement caching
+  // is incompatible with transaction-mode pooling unless this is set.
+  url = env("DATABASE_URL")
+  // Unpooled connection - used only by `prisma migrate` / `prisma db push`,
+  // which require a direct connection to run DDL reliably.
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────
+// Auth.js required models
+// https://authjs.dev/getting-started/adapters/prisma
+//
+// NOTE: with `session.strategy = "jwt"` (see src/lib/auth.config.ts),
+// the Session model below is not used for active sessions - sessions
+// live in a signed cookie instead. It's kept so the adapter remains
+// compatible if a future feature (e.g. "sign out everywhere",
+// server-side session revocation) requires switching to database
+// sessions for some or all users.
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  username      String?   @unique
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  plan      String   @default("free") // "free" | "pro"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  repositories Repository[]
+  chatSessions ChatSession[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text // ENCRYPTED at the application layer (src/lib/encryption.ts)
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─────────────────────────────────────────────
+// GitMind domain models (abbreviated)
+// ─────────────────────────────────────────────
+
+model Repository {
+  id     String @id @default(cuid())
+  userId String
+
+  // GitHub repo IDs are 64-bit. JSON.stringify() throws on BigInt by
+  // default - any API route returning this field MUST call
+  // `.toString()` on it before serializing (see REVIEW.md §3.3).
+  githubRepoId BigInt
+
+  fullName       String
+  defaultBranch  String?
+  visibility     String?
+  indexingStatus String    @default("pending") // pending | processing | done | failed
+  lastIndexedAt  DateTime?
+  createdAt      DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatSessions ChatSession[]
+
+  @@unique([userId, githubRepoId])
+  @@index([userId])
+  @@map("repositories")
+}
+
+model ChatSession {
+  id           String   @id @default(cuid())
+  userId       String
+  repositoryId String
+  title        String?
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([repositoryId])
+  @@map("chat_sessions")
+}
