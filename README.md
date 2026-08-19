@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# gitmind
-=======
 # GitMind
 
 AI-powered codebase explorer. Connect a GitHub repository, chat with your
