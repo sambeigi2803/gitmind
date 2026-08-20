@@ -39,52 +39,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     ...authConfig.callbacks,
 
     /**
-     * Runs after the adapter has created/linked the User and Account
-     * records (which includes writing the *plaintext* access_token).
-     *
-     * This callback:
-     *  1. Syncs the GitHub username onto the User row (only if changed).
-     *  2. Encrypts the access token the adapter just wrote.
-     *
-     * Both writes happen in a single transaction. If encryption fails
-     * (e.g. ENCRYPTION_KEY misconfigured), we roll back and DENY sign-in
-     * (fail closed) rather than leaving a plaintext token persisted.
-     */
-    async signIn({ user, account, profile }) {
-      if (!account || !user.id) return true;
-
-      const githubLogin = getGithubLogin(profile);
-
-      try {
-        await prisma.$transaction(async (tx) => {
-          if (githubLogin && githubLogin !== user.username) {
-            await tx.user.update({
-              where: { id: user.id },
-              data: { username: githubLogin },
-            });
-          }
-
-          if (account.access_token) {
-            await tx.account.update({
-              where: {
-                provider_providerAccountId: {
-                  provider: account.provider,
-                  providerAccountId: account.providerAccountId,
-                },
-              },
-              data: { access_token: encrypt(account.access_token) },
-            });
-          }
-        });
-      } catch (error) {
-        console.error("[auth] signIn token-encryption transaction failed", error);
-        return false; // deny sign-in; no plaintext token left committed
-      }
-
-      return true;
-    },
-
-    /**
      * Extends the base jwt callback (initial population on sign-in) with
      * a lazy refresh: if the token is older than REFRESH_INTERVAL_MS,
      * re-fetch `username`/`plan` from Postgres. This is the only place
@@ -112,6 +66,41 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
 
       return token;
+    },
+  },
+
+  events: {
+    // Fires AFTER Auth.js persists the User and Account rows (unlike the
+    // `signIn` callback, which runs before them under the JWT strategy).
+    async signIn({ user, account, profile }) {
+      if (!account || !user.id) return;
+
+      const githubLogin = getGithubLogin(profile);
+
+      try {
+        await prisma.$transaction(async (tx) => {
+          if (githubLogin) {
+            await tx.user.update({
+              where: { id: user.id },
+              data: { username: githubLogin },
+            });
+          }
+
+          if (account.access_token) {
+            await tx.account.update({
+              where: {
+                provider_providerAccountId: {
+                  provider: account.provider,
+                  providerAccountId: account.providerAccountId,
+                },
+              },
+              data: { access_token: encrypt(account.access_token) },
+            });
+          }
+        });
+      } catch (error) {
+        console.error("[auth] post-signIn token encryption failed", error);
+      }
     },
   },
 });
