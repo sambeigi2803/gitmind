@@ -136,8 +136,72 @@ between the two `.env` files.
 
 ---
 
+## Design Decisions & Tradeoffs
+
+### GitHub token encryption happens in an event, not a callback
+
+GitHub access tokens are encrypted with AES-256-GCM before being stored in
+`accounts.access_token`. The Prisma adapter writes the raw token first, so
+the encryption has to happen immediately afterwards.
+
+The obvious place for that is the `signIn` **callback** — and it has a real
+advantage: returning `false` from a callback denies sign-in, so a failure to
+encrypt could block login entirely and guarantee a plaintext token is never
+persisted. That was the original implementation.
+
+It doesn't work. Under the JWT session strategy, the `signIn` callback runs
+*before* Auth.js persists the User and Account rows, so `prisma.user.update()`
+fails with `P2025 — Record to update not found`. Sign-in is denied every time.
+
+The fix was to move the logic to the `signIn` **event**, which fires after
+persistence. The tradeoff: **events cannot deny sign-in.** If encryption
+throws, the token remains in plaintext rather than login being blocked.
+
+Why that's an acceptable risk here:
+
+- `ENCRYPTION_KEY` is validated at startup by zod (`src/lib/env.ts`), including
+  a check that it is exactly 64 hex characters. A malformed key prevents the
+  app from booting at all, so the realistic window for an encryption failure
+  is very small.
+- `getGithubAccessToken()` throws `GithubReauthRequiredError` on any token it
+  cannot decrypt, so a broken token surfaces as a "Reconnect GitHub" prompt
+  rather than an opaque failure.
+
+Two improvements that would restore the original guarantee, not yet
+implemented:
+
+1. A startup self-test that encrypts and decrypts a known string and refuses
+   to boot on failure — strictly better than checking during sign-in, since it
+   runs before any user can authenticate.
+2. A periodic audit query flagging any `access_token` that doesn't match
+   base64 ciphertext shape, as defense in depth.
+
+### JWT sessions instead of database sessions
+
+Database sessions allow server-side revocation, which is genuinely useful.
+They also mean a DB round trip on *every* authenticated request, including
+in middleware.
+
+This project uses JWT sessions and mitigates staleness with a lazy refresh:
+the `jwt` callback re-reads `username` and `plan` from Postgres only when the
+token is older than an hour. Most requests cost zero database queries;
+plan changes propagate within an hour.
+
+The `Session` model is retained in the Prisma schema so switching strategies
+later doesn't require a migration.
+
+### Split auth config for the Edge runtime
+
+`middleware.ts` runs on the Edge runtime, where `@prisma/client` is
+unavailable. Importing the Prisma-backed auth config there breaks the build.
+
+The config is therefore split: `auth.config.ts` is edge-safe (providers,
+callbacks, no adapter) and used by middleware; `auth.ts` extends it with the
+Prisma adapter for Server Components, Route Handlers, and Server Actions.
+
+---
+
 ## Documentation
 
 - `backend/BACKEND.md` — backend architecture and repo-connection flow
 - `frontend/AUTH_REVIEW.md` — auth implementation review and design decisions
->>>>>>> 31e2098 (Initial project scaffold: Next.js frontend + FastAPI backend)
