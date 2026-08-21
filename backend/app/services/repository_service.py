@@ -135,7 +135,12 @@ async def connect_repository(
         status="queued",
     )
 
+    # Flush the repository before adding the job: SQLAlchemy can't infer
+    # insert ordering from a plain FK column with no ORM relationship, so
+    # without this the job may be inserted first and violate the constraint.
     db.add(repo)
+    await db.flush()
+
     db.add(job)
     await db.commit()
     await db.refresh(repo)

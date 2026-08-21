@@ -27,6 +27,13 @@ engine = create_async_engine(
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_pre_ping=True,  # drop dead connections rather than erroring mid-request
+    # Supabase's pooler runs in transaction mode, which does not support
+    # prepared statements. Disabling asyncpg's statement cache (and giving
+    # each statement a unique name) is required when connecting through it.
+    connect_args={
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    },
     echo=settings.DEBUG,
 )
 

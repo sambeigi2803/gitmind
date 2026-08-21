@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Sync engine, worker-only. Small pool: each worker process needs just
 # enough connections for its own concurrency.
 _sync_engine = create_engine(
-    str(settings.DATABASE_URL),
+    str(settings.DATABASE_URL).replace("postgresql://", "postgresql+psycopg://"),
     pool_size=5,
     max_overflow=5,
     pool_pre_ping=True,

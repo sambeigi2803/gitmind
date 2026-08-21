@@ -7,7 +7,7 @@
 // the base URL so no component ever hardcodes an endpoint.
 
 import { auth } from "@/lib/auth";
-import { encode } from "next-auth/jwt";
+import { SignJWT } from "jose";
 import { env } from "@/lib/env";
 
 export class ApiError extends Error {
@@ -27,8 +27,11 @@ export class ApiError extends Error {
 }
 
 /**
- * Builds the bearer token sent to the backend. The backend verifies it
- * with the same AUTH_SECRET, so identity stays single-sourced in Auth.js.
+ * Mints a plain HS256-signed JWT for the backend.
+ *
+ * NOTE: Auth.js's own `encode()` produces a JWE (encrypted), which
+ * python-jose cannot verify. The backend expects a standard signed JWT,
+ * so we sign one directly with the shared AUTH_SECRET.
  */
 async function getAuthToken(): Promise<string> {
   const session = await auth();
@@ -36,15 +39,18 @@ async function getAuthToken(): Promise<string> {
     throw new ApiError(401, "unauthenticated", "Not signed in");
   }
 
-  return encode({
-    token: {
-      id: session.user.id,
-      username: session.user.username,
-      plan: session.user.plan,
-    },
-    secret: env.AUTH_SECRET,
-    salt: "",
-  });
+  const secret = new TextEncoder().encode(env.AUTH_SECRET);
+
+  return new SignJWT({
+    id: session.user.id,
+    username: session.user.username,
+    plan: session.user.plan,
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(session.user.id)
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(secret);
 }
 
 export async function apiFetch<T>(
